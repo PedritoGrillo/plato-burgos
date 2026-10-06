@@ -136,8 +136,40 @@ perfil = mf.CrossSection([np.array([
     (R - BORDE_ANCHO, GROSOR), (0, GROSOR)])])
 plato = mf.Manifold.revolve(perfil, 360)
 
+def revoluciona(perfil, x, y):
+    """Solido de revolucion a partir de un perfil (r, z), colocado en (x, y)."""
+    return mf.Manifold.revolve(mf.CrossSection([np.array(perfil, dtype=float)]), 160).translate((x, y, 0))
+
+
+def cota_en(x, y):
+    return float(cota(np.array([x]), np.array([y]))[0])
+
+
+# --- Cuenco de Aranda de Duero: crater liso con labio ---
+ax, ay = a_mm(-3.6887, 41.6705)
+zt = cota_en(ax, ay)
+labio = zt + 2.5
+crater = revoluciona([(0, Z_PIE), (20, Z_PIE), (20, zt - .6), (16.5, labio - .3), (15.2, labio),
+                      (13.8, labio), (0, labio)], ax, ay)
+a, fondo = 13.5, GROSOR - .5                     # radio de la boca y cota del fondo
+d = labio - fondo
+r_esf = (a * a + d * d) / (2 * d)
+cuenco = (mf.Manifold.sphere(r_esf, 200).translate((ax, ay, fondo + r_esf))
+          ^ mf.Manifold.cylinder(80, a + .01, a + .01, 160).translate((ax, ay, fondo - 1)))
+
+# --- Monticulo de Miranda de Ebro: peana con falda curva y cima plana ---
+mx, my = a_mm(-2.9469, 42.6865)
+CIMA = 18.0
+perfil = [(0, Z_PIE)]
+for k in range(21):
+    t = k / 20
+    perfil.append((10 + 7 * (1 - t) ** 2.2, Z_PIE + t * (CIMA - .6 - Z_PIE)))
+perfil += [(9.6, CIMA - .15), (9.0, CIMA), (0, CIMA)]
+monticulo = revoluciona(perfil, mx, my)
+
 hueco = mf.Manifold.cylinder(60, D_TAZA / 2, D_TAZA / 2, 256).translate((0, 0, FONDO_HUECO))
-pieza = (plato + relieve) - hueco
+pieza = (plato + relieve + crater + monticulo) - hueco - cuenco
+print(f'cuenco en Aranda ({ax:.1f}, {ay:.1f}) prof {labio - fondo:.1f} mm | monticulo en Miranda ({mx:.1f}, {my:.1f})')
 print('estado:', pieza.status(), '| triangulos:', pieza.num_tri(), '| volumen cm3:', round(pieza.volume() / 1000, 1))
 
 m = pieza.to_mesh()
