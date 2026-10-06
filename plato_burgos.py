@@ -85,7 +85,7 @@ for tx in range(x0, x1 + 1):
         im = np.asarray(Image.open(f).convert('RGB')).astype(np.float32)
         elev = im[..., 0] * 256 + im[..., 1] + im[..., 2] / 256 - 32768
         mosaico[(ty - y0) * 256:(ty - y0 + 1) * 256, (tx - x0) * 256:(tx - x0 + 1) * 256] = elev
-mosaico = gaussian_filter(mosaico, 1.5)
+mosaico = gaussian_filter(mosaico, 2.2)        # suaviza aristas duras del terreno
 
 
 def elevacion(lon, lat):
@@ -96,8 +96,34 @@ def elevacion(lon, lat):
 
 
 # rango de alturas dentro de la provincia (muestreo de los vertices + rejilla)
+def chaikin(p, vueltas=3):
+    """Suaviza un anillo cerrado (corta las esquinas) para un contorno organico."""
+    for _ in range(vueltas):
+        q = np.roll(p, -1, axis=0)
+        p = np.vstack([np.column_stack([.75 * p[:, 0] + .25 * q[:, 0], .75 * p[:, 1] + .25 * q[:, 1]]),
+                       np.column_stack([.25 * p[:, 0] + .75 * q[:, 0], .25 * p[:, 1] + .75 * q[:, 1]])])
+        p = p.reshape(2, -1, 2).transpose(1, 0, 2).reshape(-1, 2)
+    return p
+
+
+def area(p):
+    return .5 * abs(np.dot(p[:, 0], np.roll(p[:, 1], 1)) - np.dot(p[:, 1], np.roll(p[:, 0], 1)))
+
+
 mm_anillos = [np.column_stack(a_mm(a[:, 0], a[:, 1])) for a in anillos]
+mm_anillos = [chaikin(p) for p in mm_anillos if area(p) > 6]     # fuera restos diminutos
 seccion = mf.CrossSection(mm_anillos, mf.FillRule.EvenOdd)
+
+# distancia al borde (para bajar el relieve en rampa hacia el plato)
+from scipy.spatial import cKDTree
+puntos_borde = []
+for p in mm_anillos:
+    q = np.roll(p, -1, axis=0)
+    for (x1, y1), (x2, y2) in zip(p, q):
+        n = max(1, int(math.hypot(x2 - x1, y2 - y1) / .25))
+        t = np.arange(n) / n
+        puntos_borde.append(np.column_stack([x1 + (x2 - x1) * t, y1 + (y2 - y1) * t]))
+arbol_borde = cKDTree(np.vstack(puntos_borde))
 gx, gy = np.meshgrid(np.arange(-R_UTIL, R_UTIL, 1.0), np.arange(-R_UTIL, R_UTIL, 1.0))
 lo, la = a_lonlat(gx.ravel(), gy.ravel())
 from matplotlib.path import Path as MPath
@@ -121,10 +147,22 @@ H = 1.0
 relieve = mf.Manifold.extrude(seccion, H).translate((0, 0, Z_PIE)).refine_to_length(.6)
 
 
+RAMPA = 6.0                                  # mm en los que el relieve baja hasta el plato
+Z_BORDE = GROSOR + .4                        # altura del relieve justo en el contorno
+
+
+def cota_relieve(x, y):
+    """Cota con el borde en rampa suave (sin escalon vertical en el contorno)."""
+    d, _ = arbol_borde.query(np.column_stack([x, y]))
+    s = np.clip(d / RAMPA, 0, 1)
+    w = s * s * (3 - 2 * s)                  # smoothstep
+    return Z_BORDE + (cota(x, y) - Z_BORDE) * w
+
+
 def deforma(v):
     v = np.array(v, dtype=np.float64)
     t = (v[:, 2] - Z_PIE) / H
-    v[:, 2] = Z_PIE + t * (cota(v[:, 0], v[:, 1]) - Z_PIE)
+    v[:, 2] = Z_PIE + t * (cota_relieve(v[:, 0], v[:, 1]) - Z_PIE)
     return v
 
 
@@ -149,7 +187,12 @@ def cota_en(x, y):
 ax, ay = a_mm(-3.6887, 41.6705)
 zt = cota_en(ax, ay)
 labio = zt + 2.5
-crater = revoluciona([(0, Z_PIE), (20, Z_PIE), (20, zt - .6), (16.5, labio - .3), (15.2, labio),
+# falda exterior en rampa suave desde el plato hasta el labio (sin pared vertical)
+falda = [(23.5, Z_BORDE - .1)]
+for k in range(1, 9):
+    t = k / 8
+    falda.append((23.5 - 7 * t, Z_BORDE - .1 + (labio - .3 - Z_BORDE + .1) * (t * t * (3 - 2 * t))))
+crater = revoluciona([(0, Z_PIE), (23.5, Z_PIE)] + falda + [(15.6, labio - .1), (15.0, labio),
                       (13.8, labio), (0, labio)], ax, ay)
 a, fondo = 13.5, GROSOR - .5                     # radio de la boca y cota del fondo
 d = labio - fondo
@@ -157,15 +200,47 @@ r_esf = (a * a + d * d) / (2 * d)
 cuenco = (mf.Manifold.sphere(r_esf, 200).translate((ax, ay, fondo + r_esf))
           ^ mf.Manifold.cylinder(80, a + .01, a + .01, 160).translate((ax, ay, fondo - 1)))
 
-# --- Monticulo de Miranda de Ebro: peana con falda curva y cima plana ---
+# --- Monticulo de Miranda de Ebro: cerro natural (meseta, laderas con crestas y barrancos) ---
 mx, my = a_mm(-2.9469, 42.6865)
 CIMA = 18.0
-perfil = [(0, Z_PIE)]
-for k in range(21):
-    t = k / 20
-    perfil.append((10 + 7 * (1 - t) ** 2.2, Z_PIE + t * (CIMA - .6 - Z_PIE)))
-perfil += [(9.6, CIMA - .15), (9.0, CIMA), (0, CIMA)]
-monticulo = revoluciona(perfil, mx, my)
+R_M = 19.0
+
+
+def radio_m(th):                              # planta irregular
+    return R_M * (1 + .07 * np.sin(3 * th + 1.1) + .05 * np.sin(5 * th + 2.3) + .03 * np.sin(9 * th + .4))
+
+
+def cota_monticulo(x, y):
+    dx, dy = x - mx, y - my
+    th = np.arctan2(dy, dx)
+    s = np.hypot(dx, dy) / radio_m(th)        # 0 en el centro, 1 en el pie
+    sc = np.clip(s, 0, 1)
+    meseta = .34
+    u = np.clip((sc - meseta) / (1 - meseta), 0, 1)
+    ladera = (1 - u) ** 1.7 * (1 - .15 * u)   # ladera concava
+    # crestas y barrancos (mas marcados a media ladera) + rugosidad
+    ondas = (.55 * np.sin(7 * th + 4 * sc) + .3 * np.sin(13 * th - 6 * sc + 1) + .15 * np.sin(23 * th + 2))
+    surcos = np.sin(np.pi * u) * ondas * 1.3
+    cumbre = -.9 * (sc / meseta) ** 2 * (sc < meseta) - .9 * (sc >= meseta) + .25 * np.sin(5 * th) * (sc < meseta)
+    h = Z_BORDE + (CIMA - Z_BORDE) * ladera + surcos * (sc > meseta) + cumbre + .9
+    h = np.where(sc >= 1, Z_BORDE - .3, h)
+    return np.minimum(h, CIMA)
+
+
+th_m = np.linspace(0, 2 * np.pi, 240, endpoint=False)
+planta_m = np.column_stack([mx + radio_m(th_m) * np.cos(th_m), my + radio_m(th_m) * np.sin(th_m)])
+monticulo = (mf.Manifold.extrude(mf.CrossSection([planta_m]), H).translate((0, 0, Z_PIE))
+             .refine_to_length(.45))
+
+
+def deforma_m(v):
+    v = np.array(v, dtype=np.float64)
+    t = (v[:, 2] - Z_PIE) / H
+    v[:, 2] = Z_PIE + t * (cota_monticulo(v[:, 0], v[:, 1]) - Z_PIE)
+    return v
+
+
+monticulo = monticulo.warp_batch(deforma_m)
 
 hueco = mf.Manifold.cylinder(60, D_TAZA / 2, D_TAZA / 2, 256).translate((0, 0, FONDO_HUECO))
 pieza = (plato + relieve + crater + monticulo) - hueco - cuenco
