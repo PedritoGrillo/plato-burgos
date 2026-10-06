@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plato Burgos · visor 3D</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #e9e6df; font: 14px system-ui, sans-serif; color: #333; }
+  #info { position: absolute; left: 12px; top: 10px; right: 12px; width: fit-content; background: rgba(255,255,255,.85); padding: 6px 10px; border-radius: 8px; }
+  #info a { color: #8a5a00; font-weight: 600; }
+  #fuentes { position: absolute; left: 12px; bottom: 8px; font-size: 11px; color: #777; }
+</style>
+</head>
+<body>
+<div id="info"><b>Plato con el relieve de Burgos</b> · arrastra para girar, rueda para acercar · <a href="plato_burgos.stl" download>Descargar STL</a></div>
+<div id="fuentes">Relieve: AWS Terrain Tiles (Mapzen, datos SRTM y otros). Contorno: click_that_hood (Code for Germany).</div>
+<script type="text/plain" id="stl">/*STL*/</script>
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+               "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const escena = new THREE.Scene();
+escena.background = new THREE.Color(0xe9e6df);
+const cam = new THREE.PerspectiveCamera(35, innerWidth / innerHeight, 1, 2000);
+cam.up.set(0, 0, 1);
+cam.position.set(150, -230, 210);
+const render = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+render.setSize(innerWidth, innerHeight);
+render.setPixelRatio(devicePixelRatio);
+render.shadowMap.enabled = true;
+document.body.appendChild(render.domElement);
+const ctl = new OrbitControls(cam, render.domElement);
+ctl.target.set(0, 0, 4);
+
+escena.add(new THREE.HemisphereLight(0xffffff, 0x8a8070, 1.1));
+const sol = new THREE.DirectionalLight(0xffffff, 2.2);
+sol.position.set(-160, 120, 160);
+escena.add(sol);
+
+// El STL va incrustado (base64) para que el visor funcione con doble clic, sin servidor.
+const b64 = document.getElementById('stl').textContent.trim();
+const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+{
+  const geo = new STLLoader().parse(bin.buffer);
+  geo.computeVertexNormals();
+  const mat = new THREE.MeshStandardMaterial({ color: 0xf4f1ea, roughness: .55, metalness: 0 });
+  escena.add(new THREE.Mesh(geo, mat));
+  window.cargado = true;
+}
+addEventListener('resize', () => { cam.aspect = innerWidth / innerHeight; cam.updateProjectionMatrix(); render.setSize(innerWidth, innerHeight); });
+(function bucle() { requestAnimationFrame(bucle); ctl.update(); render.render(escena, cam); })();
+</script>
+</body>
+</html>
